@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+@theme {
+  --font-editorial: "Bricolage Grotesque", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  html,
+  body {
+    background-color: #f8fafc;
+    color: #0b0b0c;
+    font-family: var(--font-sans);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.font-editorial {
+  font-family: var(--font-editorial);
+}
+
+@keyframes cd-dash-flow {
+  from {
+    stroke-dashoffset: 32;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.cd-dash {
+  stroke-dasharray: 5 7;
+  animation: cd-dash-flow 2.8s linear infinite;
+}
+
+@keyframes cd-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.cd-marquee {
+  animation: cd-marquee 42s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cd-marquee,
+  .cd-dash {
+    animation: none !important;
+  }
+}
