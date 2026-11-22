@@ -1,0 +1,6 @@
+{
+  "name": "EdgeOps",
+  "description": "Approachable light-mode Hybrid AI Ops & Incident Triage workspace combining Firebase AI Logic on-device privacy shielding with dynamic cloud tool retrieval.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "calmduty",
+  "description": "CalmDuty (calmduty.com) — Local-first, zero-data-retention Hybrid AI operations inbox for the agent era (Web SPA + Cloud Run relay).",
+  "options": {
+    "allow-unauthenticated": true,
+    "memory": "512Mi",
+    "cpu": "1",
+    "port": 8080
+  },
+  "env": {
+    "GEMINI_API_KEY": {
+      "description": "Google Gemini API key for gemini-decision-1 (0 output tokens), gemini-3.5-flash-lite streaming chat, and gemini-4-neon tool synthesis (all called with store: false).",
+      "required": true
+    },
+    "EDGEOPS_TOKEN_ENCRYPTION_KEY": {
+      "description": "32-byte secret key used for AES-256-GCM envelope encryption of stored read-only Slack OAuth tokens.",
+      "generator": "secret",
+      "required": true
+    },
+    "SLACK_CLIENT_ID": {
+      "description": "Optional Slack App Client ID for 1-click Read-Only Slack OAuth.",
+      "required": false
+    },
+    "SLACK_CLIENT_SECRET": {
+      "description": "Optional Slack App Client Secret for 1-click Read-Only Slack OAuth.",
+      "required": false
+    }
+  }
+}

@@ -1,0 +1,552 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user workspace preferences, linked org ID, and private profile metadata.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "activeRole": {
+          "type": "string",
+          "enum": ["Support", "Finance Lead", "Admin"]
+        },
+        "activePack": {
+          "type": "string",
+          "enum": ["ecommerce", "saas", "logistics"]
+        },
+        "workspaceId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "orgId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "activeRole", "activePack", "workspaceId", "createdAt", "updatedAt"]
+    },
+    "Org": {
+      "title": "Org",
+      "description": "An EdgeOps organization created during first-run onboarding.",
+      "type": "object",
+      "properties": {
+        "orgId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "ownerRole": {
+          "type": "string",
+          "enum": ["Support", "Finance Lead", "Admin"]
+        },
+        "industryPack": {
+          "type": "string",
+          "enum": ["ecommerce", "saas", "logistics"]
+        },
+        "defaultSlackChannel": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "slackConnected": {
+          "type": "boolean"
+        },
+        "slackTeam": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "slackBotName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "webhookUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "memberIds": {
+          "type": "array"
+        },
+        "memberUids": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["orgId", "ownerId", "name", "ownerRole", "industryPack", "defaultSlackChannel", "slackConnected", "createdAt", "updatedAt"]
+    },
+    "OrgIncident": {
+      "title": "OrgIncident",
+      "description": "An organization incident ingested from BYO Slack webhooks or manual/sample triage.",
+      "type": "object",
+      "properties": {
+        "incidentId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "orgId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "channel": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "suppressed", "investigating", "resolved"]
+        },
+        "inferenceMode": {
+          "type": "string",
+          "enum": ["on_device", "cloud"]
+        },
+        "scrubbedSummary": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "piiRedactedCount": {
+          "type": "number"
+        },
+        "isNoise": {
+          "type": "boolean"
+        },
+        "noiseReason": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "suggestedReply": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "diagnosis": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "remediationPlan": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "toolsUsed": {
+          "type": "array"
+        },
+        "toolsTotal": {
+          "type": "number"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["slack", "sample", "manual"]
+        },
+        "slackPosted": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "incidentId",
+        "orgId",
+        "ownerId",
+        "title",
+        "channel",
+        "severity",
+        "status",
+        "inferenceMode",
+        "scrubbedSummary",
+        "piiRedactedCount",
+        "isNoise",
+        "noiseReason",
+        "suggestedReply",
+        "slackPosted",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Workspace": {
+      "title": "Workspace",
+      "description": "Legacy EdgeOps triage workspace owned by a user.",
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "industryPack": {
+          "type": "string",
+          "enum": ["ecommerce", "saas", "logistics"]
+        },
+        "defaultSlackChannel": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["workspaceId", "ownerId", "name", "industryPack", "defaultSlackChannel", "createdAt", "updatedAt"]
+    },
+    "Incident": {
+      "title": "Incident",
+      "description": "An operations alert or incident ticket triaged by the local privacy shield and optional cloud investigation.",
+      "type": "object",
+      "properties": {
+        "incidentId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "channel": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "suppressed", "investigating", "resolved"]
+        },
+        "inferenceMode": {
+          "type": "string",
+          "enum": ["on_device", "cloud"]
+        },
+        "scrubbedSummary": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "piiRedactedCount": {
+          "type": "number"
+        },
+        "isNoise": {
+          "type": "boolean"
+        },
+        "noiseReason": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "suggestedReply": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "diagnosis": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "remediationPlan": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "toolsUsed": {
+          "type": "array"
+        },
+        "toolsTotal": {
+          "type": "number"
+        },
+        "slackPosted": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "incidentId",
+        "workspaceId",
+        "ownerId",
+        "title",
+        "channel",
+        "severity",
+        "status",
+        "inferenceMode",
+        "scrubbedSummary",
+        "piiRedactedCount",
+        "isNoise",
+        "noiseReason",
+        "suggestedReply",
+        "slackPosted",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Connector": {
+      "title": "Connector",
+      "description": "A vendor-agnostic tool connector (Remote MCP Server or OpenAPI spec) registered with defer_loading enabled.",
+      "type": "object",
+      "properties": {
+        "connectorId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["mcp", "openapi"]
+        },
+        "endpointUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "deferLoading": {
+          "type": "boolean"
+        },
+        "roleAccess": {
+          "type": "string",
+          "enum": ["Viewer", "Operator", "Admin"]
+        },
+        "toolCount": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "connectorId",
+        "workspaceId",
+        "ownerId",
+        "name",
+        "kind",
+        "endpointUrl",
+        "deferLoading",
+        "roleAccess",
+        "toolCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SlackPrivateConfig": {
+      "title": "SlackPrivateConfig",
+      "description": "Owner-only BYO Slack App credentials and webhook configuration.",
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "botName": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "defaultChannel": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "botTokenHint": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "hasSigningSecret": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["workspaceId", "ownerId", "botName", "defaultChannel", "botTokenHint", "hasSigningSecret", "updatedAt"]
+    },
+    "ServerSlackConnection": {
+      "title": "ServerSlackConnection",
+      "description": "Server-only durable Slack OAuth connection metadata and bot access token. Locked completely to clients via firestore.rules and accessed only by the backend.",
+      "type": "object",
+      "properties": {
+        "orgId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "team": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "teamId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "botName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "botUserId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "accessToken": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "selectedChannelIds": {
+          "type": "array"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["orgId", "team", "botName", "botUserId", "accessToken", "selectedChannelIds", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/server_slack_connections/{orgId}": {
+      "schema": { "$ref": "#/entities/ServerSlackConnection" },
+      "description": "Server-only Slack OAuth tokens and channel preferences; strictly denied to all browser/client SDK access."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user preferences, linked orgId, and active triage role; strictly readable and writable only by the owner."
+    },
+    "/orgs/{orgId}": {
+      "schema": { "$ref": "#/entities/Org" },
+      "description": "Organization metadata created during first-run onboarding."
+    },
+    "/orgs/{orgId}/incidents/{incidentId}": {
+      "schema": { "$ref": "#/entities/OrgIncident" },
+      "description": "Scrubbed incident triage records scoped to an organization."
+    },
+    "/orgs/{orgId}/connectors/{connectorId}": {
+      "schema": { "$ref": "#/entities/Connector" },
+      "description": "Registered Remote MCP servers and imported OpenAPI connectors scoped to an organization."
+    },
+    "/orgs/{orgId}/private/{configId}": {
+      "schema": { "$ref": "#/entities/SlackPrivateConfig" },
+      "description": "Owner-only BYO Slack integration metadata scoped to an organization."
+    },
+    "/workspaces/{workspaceId}": {
+      "schema": { "$ref": "#/entities/Workspace" },
+      "description": "Legacy triage workspace metadata owned by a single authenticated user."
+    },
+    "/workspaces/{workspaceId}/incidents/{incidentId}": {
+      "schema": { "$ref": "#/entities/Incident" },
+      "description": "Legacy scrubbed incident triage records scoped to a workspace."
+    },
+    "/workspaces/{workspaceId}/connectors/{connectorId}": {
+      "schema": { "$ref": "#/entities/Connector" },
+      "description": "Legacy registered Remote MCP servers and imported OpenAPI connectors scoped to a workspace."
+    },
+    "/workspaces/{workspaceId}/private/{configId}": {
+      "schema": { "$ref": "#/entities/SlackPrivateConfig" },
+      "description": "Legacy owner-only BYO Slack integration metadata."
+    }
+  }
+}
