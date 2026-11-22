@@ -1,0 +1,620 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: /server_slack_connections/{orgId}
+//   Server-only KMS-wrapped Slack OAuth credentials (strictly denied to clients).
+//
+// Collection: /admins/{adminId}
+//   Out-of-band admin registry (read-only by owner; no client writes).
+//
+// Collection: /users/{userId}
+//   Private user profile (PII isolated to verified owner or admin).
+//
+// Collection: /orgs/{orgId}
+//   Workspace root owned by ownerId/ownerUid with optional memberIds/memberUids.
+//   Subcollections:
+//     - /orgs/{orgId}/incidents/{incidentId}: Redacted incident records (no raw PII).
+//     - /orgs/{orgId}/connectors/{connectorId}: MCP / OpenAPI tool connectors.
+//     - /orgs/{orgId}/private/{configId}: Non-secret Slack metadata hints only.
+//     - /orgs/{orgId}/alert_states/{alertHash}: Zero-knowledge blind HMAC-SHA256
+//       alert triage state sync (zero raw PII, text, title, body, or rawMessage).
+//       Fields:
+//         - alertHash: string (required, immutable, <= 64, matches document ID)
+//         - orgId: string (required, immutable, matches parent orgId)
+//         - ownerId: string (required, immutable, creator UID)
+//         - status: string (required, enum: 'open' | 'snoozed' | 'resolved' | 'noise')
+//         - bucket: string (required, enum: 'needs_action' | 'hidden_noise')
+//         - updatedBy: string (required, matches request.auth.uid)
+//         - updatedAt: timestamp (required, == request.time)
+//         - expireAt: timestamp (optional, TTL expiration timestamp)
+//         - snoozedUntil: timestamp | null (optional)
+//
+// Collection: /workspaces/{workspaceId}
+//   Legacy workspace root + incidents/connectors/private subcollections.
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isVerified() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isVerified() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isWorkspaceOwner(workspaceId) {
+      return exists(/databases/$(database)/documents/workspaces/$(workspaceId)) &&
+        get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid;
+    }
+
+    function isOrgOwner(orgId) {
+      return exists(/databases/$(database)/documents/orgs/$(orgId)) && (
+        get(/databases/$(database)/documents/orgs/$(orgId)).data.ownerId == request.auth.uid ||
+        ('ownerUid' in get(/databases/$(database)/documents/orgs/$(orgId)).data &&
+          get(/databases/$(database)/documents/orgs/$(orgId)).data.ownerUid == request.auth.uid)
+      );
+    }
+
+    function isOrgMemberOrOwner(orgId) {
+      return isOrgOwner(orgId) || (
+        exists(/databases/$(database)/documents/orgs/$(orgId)) && (
+          ('memberIds' in get(/databases/$(database)/documents/orgs/$(orgId)).data &&
+            get(/databases/$(database)/documents/orgs/$(orgId)).data.memberIds is list &&
+            request.auth.uid in get(/databases/$(database)/documents/orgs/$(orgId)).data.memberIds) ||
+          ('memberUids' in get(/databases/$(database)/documents/orgs/$(orgId)).data &&
+            get(/databases/$(database)/documents/orgs/$(orgId)).data.memberUids is list &&
+            request.auth.uid in get(/databases/$(database)/documents/orgs/$(orgId)).data.memberUids)
+        )
+      );
+    }
+
+    // --- Validation Blueprints (Aligned verbatim with firebase-blueprint.json) ---
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'activeRole', 'activePack', 'workspaceId', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'displayName', 'activeRole', 'activePack', 'workspaceId', 'orgId', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+        data.activeRole in ['Support', 'Finance Lead', 'Admin'] &&
+        data.activePack in ['ecommerce', 'saas', 'logistics'] &&
+        isValidId(data.workspaceId) &&
+        (!('orgId' in data) || isValidId(data.orgId)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidOrg(data, orgId) {
+      return data.keys().hasAll(['orgId', 'ownerId', 'name', 'ownerRole', 'industryPack', 'defaultSlackChannel', 'slackConnected', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['orgId', 'ownerId', 'ownerUid', 'name', 'ownerRole', 'industryPack', 'defaultSlackChannel', 'slackConnected', 'slackTeam', 'slackBotName', 'webhookUrl', 'memberIds', 'memberUids', 'createdAt', 'updatedAt']) &&
+        isValidId(data.orgId) &&
+        data.orgId == orgId &&
+        isValidId(data.ownerId) &&
+        (!('ownerUid' in data) || isValidId(data.ownerUid)) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.ownerRole in ['Support', 'Finance Lead', 'Admin'] &&
+        data.industryPack in ['ecommerce', 'saas', 'logistics'] &&
+        data.defaultSlackChannel is string && data.defaultSlackChannel.size() >= 1 && data.defaultSlackChannel.size() <= 80 &&
+        data.slackConnected is bool &&
+        (!('slackTeam' in data) || (data.slackTeam is string && data.slackTeam.size() <= 120)) &&
+        (!('slackBotName' in data) || (data.slackBotName is string && data.slackBotName.size() <= 80)) &&
+        (!('webhookUrl' in data) || (data.webhookUrl is string && data.webhookUrl.size() <= 500)) &&
+        (!('memberIds' in data) || (
+          data.memberIds is list &&
+          data.memberIds.size() <= 50 &&
+          (data.memberIds.size() == 0 || isValidId(data.memberIds[0]))
+        )) &&
+        (!('memberUids' in data) || (
+          data.memberUids is list &&
+          data.memberUids.size() <= 50 &&
+          (data.memberUids.size() == 0 || isValidId(data.memberUids[0]))
+        )) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidOrgIncident(data, orgId, incidentId) {
+      return data.keys().hasAll([
+          'incidentId', 'orgId', 'ownerId', 'title', 'channel', 'severity',
+          'status', 'inferenceMode', 'scrubbedSummary', 'piiRedactedCount',
+          'isNoise', 'noiseReason', 'suggestedReply', 'slackPosted', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'incidentId', 'orgId', 'ownerId', 'ownerUid', 'title', 'channel', 'severity',
+          'status', 'inferenceMode', 'scrubbedSummary', 'piiRedactedCount',
+          'isNoise', 'noiseReason', 'suggestedReply', 'diagnosis', 'remediationPlan',
+          'toolsUsed', 'toolsTotal', 'source', 'slackPosted', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.incidentId) && data.incidentId == incidentId &&
+        isValidId(data.orgId) && data.orgId == orgId &&
+        isValidId(data.ownerId) &&
+        (!('ownerUid' in data) || isValidId(data.ownerUid)) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        data.channel is string && data.channel.size() >= 1 && data.channel.size() <= 64 &&
+        data.severity in ['low', 'medium', 'high', 'critical'] &&
+        data.status in ['open', 'suppressed', 'investigating', 'resolved'] &&
+        data.inferenceMode in ['on_device', 'cloud'] &&
+        data.scrubbedSummary is string && data.scrubbedSummary.size() <= 4000 &&
+        data.piiRedactedCount is number && data.piiRedactedCount >= 0 && data.piiRedactedCount <= 500 &&
+        data.isNoise is bool &&
+        data.noiseReason is string && data.noiseReason.size() <= 300 &&
+        data.suggestedReply is string && data.suggestedReply.size() <= 2000 &&
+        (!('diagnosis' in data) || (data.diagnosis is string && data.diagnosis.size() <= 4000)) &&
+        (!('remediationPlan' in data) || (data.remediationPlan is string && data.remediationPlan.size() <= 2000)) &&
+        (!('toolsUsed' in data) || (
+          data.toolsUsed is list &&
+          data.toolsUsed.size() <= 15 &&
+          (data.toolsUsed.size() == 0 || (data.toolsUsed[0] is string && data.toolsUsed[0].size() <= 120))
+        )) &&
+        (!('toolsTotal' in data) || (data.toolsTotal is number && data.toolsTotal >= 0 && data.toolsTotal <= 500)) &&
+        (!('source' in data) || data.source in ['slack', 'sample', 'manual']) &&
+        data.slackPosted is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspace(data, workspaceId) {
+      return data.keys().hasAll(['workspaceId', 'ownerId', 'name', 'industryPack', 'defaultSlackChannel', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['workspaceId', 'ownerId', 'name', 'industryPack', 'defaultSlackChannel', 'createdAt', 'updatedAt']) &&
+        isValidId(data.workspaceId) &&
+        data.workspaceId == workspaceId &&
+        isValidId(data.ownerId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.industryPack in ['ecommerce', 'saas', 'logistics'] &&
+        data.defaultSlackChannel is string && data.defaultSlackChannel.size() >= 1 && data.defaultSlackChannel.size() <= 80 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidIncident(data, workspaceId, incidentId) {
+      return data.keys().hasAll([
+          'incidentId', 'workspaceId', 'ownerId', 'title', 'channel', 'severity',
+          'status', 'inferenceMode', 'scrubbedSummary', 'piiRedactedCount',
+          'isNoise', 'noiseReason', 'suggestedReply', 'slackPosted', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'incidentId', 'workspaceId', 'ownerId', 'title', 'channel', 'severity',
+          'status', 'inferenceMode', 'scrubbedSummary', 'piiRedactedCount',
+          'isNoise', 'noiseReason', 'suggestedReply', 'diagnosis', 'remediationPlan',
+          'toolsUsed', 'toolsTotal', 'slackPosted', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.incidentId) && data.incidentId == incidentId &&
+        isValidId(data.workspaceId) && data.workspaceId == workspaceId &&
+        isValidId(data.ownerId) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        data.channel is string && data.channel.size() >= 1 && data.channel.size() <= 64 &&
+        data.severity in ['low', 'medium', 'high', 'critical'] &&
+        data.status in ['open', 'suppressed', 'investigating', 'resolved'] &&
+        data.inferenceMode in ['on_device', 'cloud'] &&
+        data.scrubbedSummary is string && data.scrubbedSummary.size() <= 4000 &&
+        data.piiRedactedCount is number && data.piiRedactedCount >= 0 && data.piiRedactedCount <= 500 &&
+        data.isNoise is bool &&
+        data.noiseReason is string && data.noiseReason.size() <= 300 &&
+        data.suggestedReply is string && data.suggestedReply.size() <= 2000 &&
+        (!('diagnosis' in data) || (data.diagnosis is string && data.diagnosis.size() <= 4000)) &&
+        (!('remediationPlan' in data) || (data.remediationPlan is string && data.remediationPlan.size() <= 2000)) &&
+        (!('toolsUsed' in data) || (
+          data.toolsUsed is list &&
+          data.toolsUsed.size() <= 15 &&
+          (data.toolsUsed.size() == 0 || (data.toolsUsed[0] is string && data.toolsUsed[0].size() <= 120))
+        )) &&
+        (!('toolsTotal' in data) || (data.toolsTotal is number && data.toolsTotal >= 0 && data.toolsTotal <= 500)) &&
+        data.slackPosted is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidConnector(data, parentId, connectorId) {
+      return data.keys().hasAll([
+          'connectorId', 'workspaceId', 'ownerId', 'name', 'kind', 'endpointUrl',
+          'deferLoading', 'roleAccess', 'toolCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'connectorId', 'workspaceId', 'ownerId', 'name', 'kind', 'endpointUrl',
+          'deferLoading', 'roleAccess', 'toolCount', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.connectorId) && data.connectorId == connectorId &&
+        isValidId(data.workspaceId) && data.workspaceId == parentId &&
+        isValidId(data.ownerId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.kind in ['mcp', 'openapi'] &&
+        data.endpointUrl is string && data.endpointUrl.size() >= 1 && data.endpointUrl.size() <= 500 &&
+        data.deferLoading is bool &&
+        data.roleAccess in ['Viewer', 'Operator', 'Admin'] &&
+        data.toolCount is number && data.toolCount >= 0 && data.toolCount <= 200 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSlackPrivateConfig(data, parentId) {
+      return data.keys().hasAll(['workspaceId', 'ownerId', 'botName', 'defaultChannel', 'botTokenHint', 'hasSigningSecret', 'updatedAt']) &&
+        data.keys().hasOnly(['workspaceId', 'ownerId', 'botName', 'defaultChannel', 'botTokenHint', 'hasSigningSecret', 'updatedAt']) &&
+        isValidId(data.workspaceId) && data.workspaceId == parentId &&
+        isValidId(data.ownerId) &&
+        data.botName is string && data.botName.size() >= 1 && data.botName.size() <= 60 &&
+        data.defaultChannel is string && data.defaultChannel.size() >= 1 && data.defaultChannel.size() <= 80 &&
+        data.botTokenHint is string && data.botTokenHint.size() <= 64 &&
+        data.hasSigningSecret is bool &&
+        data.updatedAt is timestamp;
+    }
+
+    // Zero-Knowledge Blind HMAC-SHA256 Alert State Sync (Zero raw PII, text, title, body, or rawMessage)
+    function isValidAlertState(data, orgId, alertHash) {
+      return data.keys().hasAll([
+          'alertHash', 'orgId', 'ownerId', 'status', 'bucket', 'updatedBy', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'alertHash', 'orgId', 'ownerId', 'status', 'bucket', 'updatedBy', 'updatedAt',
+          'expireAt', 'snoozedUntil'
+        ]) &&
+        isValidId(data.alertHash) && data.alertHash.size() <= 64 && data.alertHash == alertHash &&
+        isValidId(data.orgId) && data.orgId == orgId &&
+        isValidId(data.ownerId) &&
+        data.status is string && data.status in ['open', 'snoozed', 'resolved', 'noise'] &&
+        data.bucket is string && data.bucket in ['needs_action', 'hidden_noise'] &&
+        isValidId(data.updatedBy) && data.updatedBy == request.auth.uid &&
+        data.updatedAt is timestamp && data.updatedAt == request.time &&
+        (!('expireAt' in data) || data.expireAt is timestamp) &&
+        (!('snoozedUntil' in data) || data.snoozedUntil == null || data.snoozedUntil is timestamp);
+    }
+
+    // --- Collection Rules ---
+
+    // Server-only Slack OAuth connections (strictly inaccessible to browser/client SDKs)
+    match /server_slack_connections/{orgId} {
+      allow read, write: if false;
+    }
+
+    // Connection test document (read-only check for boot connectivity)
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    // Admin registry (read-only by owner, managed out-of-band)
+    match /admins/{adminId} {
+      allow get: if isOwner(adminId);
+    }
+
+    // Private User Profiles (PII Isolated to Owner)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow create: if isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) &&
+        isValidUserProfile(incoming()) &&
+        (isOwner(userId) || isAdmin()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'activeRole', 'activePack', 'orgId', 'updatedAt']);
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // Organizations (First-Run Onboarding Root)
+    match /orgs/{orgId} {
+      allow get: if isValidId(orgId) && isVerified() && (
+        existing().ownerId == request.auth.uid ||
+        ('ownerUid' in existing() && existing().ownerUid == request.auth.uid) ||
+        ('memberIds' in existing() && existing().memberIds is list && request.auth.uid in existing().memberIds) ||
+        ('memberUids' in existing() && existing().memberUids is list && request.auth.uid in existing().memberUids) ||
+        isAdmin()
+      );
+      allow list: if isVerified() && resource.data.ownerId == request.auth.uid;
+      allow create: if isValidId(orgId) &&
+        isVerified() &&
+        isValidOrg(incoming(), orgId) &&
+        incoming().ownerId == request.auth.uid &&
+        (!('ownerUid' in incoming()) || incoming().ownerUid == request.auth.uid) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(orgId) &&
+        isValidOrg(incoming(), orgId) &&
+        isVerified() &&
+        (existing().ownerId == request.auth.uid || ('ownerUid' in existing() && existing().ownerUid == request.auth.uid) || isAdmin()) &&
+        incoming().ownerId == existing().ownerId &&
+        (!('ownerUid' in existing()) || incoming().ownerUid == existing().ownerUid) &&
+        incoming().orgId == existing().orgId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'ownerRole', 'industryPack', 'defaultSlackChannel', 'slackConnected', 'slackTeam', 'slackBotName', 'webhookUrl', 'memberIds', 'memberUids', 'updatedAt']);
+      allow delete: if isValidId(orgId) && isVerified() && (existing().ownerId == request.auth.uid || ('ownerUid' in existing() && existing().ownerUid == request.auth.uid) || isAdmin());
+
+      // Org Incidents Subcollection (Master Gate enforced via parent Org)
+      match /incidents/{incidentId} {
+        allow get: if isValidId(orgId) && isValidId(incidentId) && isVerified() && (
+          isOrgMemberOrOwner(orgId) || isAdmin()
+        );
+        allow list: if isVerified() && resource.data.ownerId == request.auth.uid;
+        allow create: if isValidId(orgId) && isValidId(incidentId) &&
+          isVerified() &&
+          isValidOrgIncident(incoming(), orgId, incidentId) &&
+          incoming().ownerId == request.auth.uid &&
+          (!('ownerUid' in incoming()) || incoming().ownerUid == request.auth.uid) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          isOrgMemberOrOwner(orgId);
+        allow update: if isValidId(orgId) && isValidId(incidentId) &&
+          isValidOrgIncident(incoming(), orgId, incidentId) &&
+          isVerified() &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().orgId == existing().orgId &&
+          incoming().incidentId == existing().incidentId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              isOrgMemberOrOwner(orgId) &&
+              (
+                (incoming().slackPosted == true && incoming().diff(existing()).affectedKeys().hasOnly(['slackPosted', 'updatedAt'])) ||
+                (
+                  existing().status != 'resolved' &&
+                  (
+                    incoming().diff(existing()).affectedKeys().hasOnly(['status', 'isNoise', 'noiseReason', 'suggestedReply', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['status', 'inferenceMode', 'diagnosis', 'remediationPlan', 'toolsUsed', 'toolsTotal', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['status', 'remediationPlan', 'updatedAt'])
+                  )
+                )
+              )
+            )
+          );
+        allow delete: if isValidId(orgId) && isValidId(incidentId) && isVerified() && (
+          (existing().ownerId == request.auth.uid && isOrgOwner(orgId)) || isAdmin()
+        );
+      }
+
+      // Org Connectors Subcollection
+      match /connectors/{connectorId} {
+        allow get: if isValidId(orgId) && isValidId(connectorId) && isVerified() && (
+          (existing().ownerId == request.auth.uid && isOrgOwner(orgId)) || isAdmin()
+        );
+        allow list: if isVerified() && resource.data.ownerId == request.auth.uid;
+        allow create: if isValidId(orgId) && isValidId(connectorId) &&
+          isVerified() &&
+          isValidConnector(incoming(), orgId, connectorId) &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          isOrgOwner(orgId);
+        allow update: if isValidId(orgId) && isValidId(connectorId) &&
+          isValidConnector(incoming(), orgId, connectorId) &&
+          isVerified() &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().connectorId == existing().connectorId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              existing().ownerId == request.auth.uid &&
+              isOrgOwner(orgId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['name', 'endpointUrl', 'roleAccess', 'toolCount', 'updatedAt'])
+            )
+          );
+        allow delete: if isValidId(orgId) && isValidId(connectorId) && isVerified() && (
+          (existing().ownerId == request.auth.uid && isOrgOwner(orgId)) || isAdmin()
+        );
+      }
+
+      // Org Private BYO Slack Config
+      match /private/{configId} {
+        allow get: if isValidId(orgId) && isValidId(configId) && isVerified() && (
+          (existing().ownerId == request.auth.uid && isOrgOwner(orgId)) || isAdmin()
+        );
+        allow create: if isValidId(orgId) && isValidId(configId) &&
+          isVerified() &&
+          isValidSlackPrivateConfig(incoming(), orgId) &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().updatedAt == request.time &&
+          isOrgOwner(orgId);
+        allow update: if isValidId(orgId) && isValidId(configId) &&
+          isValidSlackPrivateConfig(incoming(), orgId) &&
+          isVerified() &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              existing().ownerId == request.auth.uid &&
+              isOrgOwner(orgId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['botName', 'defaultChannel', 'botTokenHint', 'hasSigningSecret', 'updatedAt'])
+            )
+          );
+        allow delete: if isValidId(orgId) && isValidId(configId) && isVerified() && (
+          (existing().ownerId == request.auth.uid && isOrgOwner(orgId)) || isAdmin()
+        );
+      }
+
+      // Zero-Knowledge Blind HMAC-SHA256 Alert State Sync (Zero raw PII or text bodies)
+      match /alert_states/{alertHash} {
+        allow get: if isValidId(orgId) && isValidId(alertHash) && alertHash.size() <= 64 && isVerified() && (
+          isOrgMemberOrOwner(orgId) || isAdmin()
+        );
+        allow list: if isValidId(orgId) && isVerified() && (
+          isOrgMemberOrOwner(orgId) || isAdmin()
+        );
+        allow create: if isValidId(orgId) && isValidId(alertHash) && alertHash.size() <= 64 &&
+          isVerified() &&
+          exists(/databases/$(database)/documents/orgs/$(orgId)) &&
+          (isOrgMemberOrOwner(orgId) || isAdmin()) &&
+          isValidAlertState(incoming(), orgId, alertHash) &&
+          incoming().ownerId == request.auth.uid;
+        allow update: if isValidId(orgId) && isValidId(alertHash) && alertHash.size() <= 64 &&
+          isVerified() &&
+          (isOrgMemberOrOwner(orgId) || isAdmin()) &&
+          isValidAlertState(incoming(), orgId, alertHash) &&
+          incoming().alertHash == existing().alertHash &&
+          incoming().orgId == existing().orgId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'status', 'bucket', 'updatedBy', 'updatedAt', 'expireAt', 'snoozedUntil'
+          ]);
+        allow delete: if isValidId(orgId) && isValidId(alertHash) && alertHash.size() <= 64 && isVerified() && (
+          isOrgMemberOrOwner(orgId) || isAdmin()
+        );
+      }
+    }
+
+    // Legacy Workspaces (Preserved for backward compatibility)
+    match /workspaces/{workspaceId} {
+      allow get: if isValidId(workspaceId) && isVerified() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && resource.data.ownerId == request.auth.uid;
+      allow create: if isValidId(workspaceId) &&
+        isVerified() &&
+        isValidWorkspace(incoming(), workspaceId) &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(workspaceId) &&
+        isValidWorkspace(incoming(), workspaceId) &&
+        isVerified() &&
+        (existing().ownerId == request.auth.uid || isAdmin()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().workspaceId == existing().workspaceId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'industryPack', 'defaultSlackChannel', 'updatedAt']);
+      allow delete: if isValidId(workspaceId) && isVerified() && (existing().ownerId == request.auth.uid || isAdmin());
+
+      match /incidents/{incidentId} {
+        allow get: if isValidId(workspaceId) && isValidId(incidentId) && isVerified() && (
+          (existing().ownerId == request.auth.uid && isWorkspaceOwner(workspaceId)) || isAdmin()
+        );
+        allow list: if isVerified() && resource.data.ownerId == request.auth.uid;
+        allow create: if isValidId(workspaceId) && isValidId(incidentId) &&
+          isVerified() &&
+          isValidIncident(incoming(), workspaceId, incidentId) &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          isWorkspaceOwner(workspaceId);
+        allow update: if isValidId(workspaceId) && isValidId(incidentId) &&
+          isValidIncident(incoming(), workspaceId, incidentId) &&
+          isVerified() &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().incidentId == existing().incidentId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              existing().ownerId == request.auth.uid &&
+              isWorkspaceOwner(workspaceId) &&
+              (
+                (existing().slackPosted == false && incoming().slackPosted == true && incoming().diff(existing()).affectedKeys().hasOnly(['slackPosted', 'updatedAt'])) ||
+                (
+                  existing().status != 'resolved' &&
+                  (
+                    incoming().diff(existing()).affectedKeys().hasOnly(['status', 'isNoise', 'noiseReason', 'suggestedReply', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['status', 'inferenceMode', 'diagnosis', 'remediationPlan', 'toolsUsed', 'toolsTotal', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['status', 'remediationPlan', 'updatedAt'])
+                  )
+                )
+              )
+            )
+          );
+        allow delete: if isValidId(workspaceId) && isValidId(incidentId) && isVerified() && (
+          (existing().ownerId == request.auth.uid && isWorkspaceOwner(workspaceId)) || isAdmin()
+        );
+      }
+
+      match /connectors/{connectorId} {
+        allow get: if isValidId(workspaceId) && isValidId(connectorId) && isVerified() && (
+          (existing().ownerId == request.auth.uid && isWorkspaceOwner(workspaceId)) || isAdmin()
+        );
+        allow list: if isVerified() && resource.data.ownerId == request.auth.uid;
+        allow create: if isValidId(workspaceId) && isValidId(connectorId) &&
+          isVerified() &&
+          isValidConnector(incoming(), workspaceId, connectorId) &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          isWorkspaceOwner(workspaceId);
+        allow update: if isValidId(workspaceId) && isValidId(connectorId) &&
+          isValidConnector(incoming(), workspaceId, connectorId) &&
+          isVerified() &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().connectorId == existing().connectorId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              existing().ownerId == request.auth.uid &&
+              isWorkspaceOwner(workspaceId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['name', 'endpointUrl', 'roleAccess', 'toolCount', 'updatedAt'])
+            )
+          );
+        allow delete: if isValidId(workspaceId) && isValidId(connectorId) && isVerified() && (
+          (existing().ownerId == request.auth.uid && isWorkspaceOwner(workspaceId)) || isAdmin()
+        );
+      }
+
+      match /private/{configId} {
+        allow get: if isValidId(workspaceId) && isValidId(configId) && isVerified() && (
+          (existing().ownerId == request.auth.uid && isWorkspaceOwner(workspaceId)) || isAdmin()
+        );
+        allow create: if isValidId(workspaceId) && isValidId(configId) &&
+          isVerified() &&
+          isValidSlackPrivateConfig(incoming(), workspaceId) &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().updatedAt == request.time &&
+          isWorkspaceOwner(workspaceId);
+        allow update: if isValidId(workspaceId) && isValidId(configId) &&
+          isValidSlackPrivateConfig(incoming(), workspaceId) &&
+          isVerified() &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              existing().ownerId == request.auth.uid &&
+              isWorkspaceOwner(workspaceId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['botName', 'defaultChannel', 'botTokenHint', 'hasSigningSecret', 'updatedAt'])
+            )
+          );
+        allow delete: if isValidId(workspaceId) && isValidId(configId) && isVerified() && (
+          (existing().ownerId == request.auth.uid && isWorkspaceOwner(workspaceId)) || isAdmin()
+        );
+      }
+    }
+  }
+}
